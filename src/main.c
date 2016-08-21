@@ -355,9 +355,8 @@ done:
     return had_error;
 }
 
-static void relay_worker(bool * const first_connection)
+static void relay_worker(bool * const first_connection, char const * const module_address)
 {
-    char const module_address[] = "192.168.1.32";
     int16_t module_port = TELNET_PORT;
     char const * const module_username = "admin";
     char const * const module_password = "admin";
@@ -408,9 +407,14 @@ int main(int argc, char * * argv)
 {
     bool first_connection = true;
 
+    if (argc < 2)
+    {
+        fprintf(stderr, "Format: %s <module address>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
     for (;;)
     {
-        relay_worker(&first_connection);
+        relay_worker(&first_connection, argv[1]);
     }
 
     return 0;
