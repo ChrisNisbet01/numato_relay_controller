@@ -1,5 +1,5 @@
 #include "read_line.h"
-#include "get_char_with_timeout.h"
+#include <get_char_with_timeout.h>
 
 #include <stdlib.h>
 #include <string.h>
