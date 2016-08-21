@@ -254,6 +254,60 @@ static json_object * read_json_from_stream(int const fd, unsigned int const read
     return obj;
 }
 
+static void process_json_message(json_object * const message, int const relay_fd)
+{
+    json_object * params;
+    json_object * zones_array;
+    int num_zones;
+    int index;
+
+    json_object_object_get_ex(message, "params", &params);
+    if (params == NULL)
+    {
+        goto done;
+    }
+    json_object_object_get_ex(params, "zones", &zones_array);
+
+    if (json_object_get_type(zones_array) != json_type_array)
+    {
+        goto done;
+    }
+    num_zones = json_object_array_length(zones_array);
+
+    for (index = 0; index < num_zones; index++)
+    {
+        json_object * const zone = json_object_array_get_idx(zones_array, index);
+        json_object * object;
+        char const * state_value;
+        char relay_id;
+
+        json_object_object_get_ex(zone, "state", &object);
+        if (object == NULL)
+        {
+            continue;
+        }
+        state_value = json_object_get_string(object);
+
+        json_object_object_get_ex(zone, "id", &object);
+        if (object == NULL)
+        {
+            continue;
+        }
+        relay_id = json_object_get_int(object);
+        fprintf(stderr, "relay id %u to state %s\n", relay_id, state_value);
+        if (strcasecmp(state_value, "on") == 0)
+        {
+            set_relay_state(relay_fd, relay_id, true);
+        }
+        else if (strcasecmp(state_value, "off") == 0)
+        {
+            set_relay_state(relay_fd, relay_id, false);
+        }
+    }
+
+done:
+    return;
+}
 static bool process_commands(int const command_fd, int const relay_fd)
 {
     fd_set fds;
@@ -264,6 +318,11 @@ static bool process_commands(int const command_fd, int const relay_fd)
     FD_SET(command_fd, &fds);
     num_fds = command_fd + 1;
 
+    /* XXX - TODO - reqork so that the connection to the relay 
+     * module is only established once we received a message. 
+     * If no message is received for a period of time we may as well 
+     * close the connection to the relay module. 
+     */
     for (;;)
     {
         int sockets_waiting;
@@ -284,7 +343,9 @@ static bool process_commands(int const command_fd, int const relay_fd)
         }
 
         message = read_json_from_stream(msg_sock, 5);
-        fprintf(stderr, "got message %p\n", message);
+
+        process_json_message(message, relay_fd);
+
         json_object_put(message);
     }
 
@@ -301,7 +362,6 @@ static void relay_worker(bool * const first_connection)
     char const * const module_username = "admin";
     char const * const module_password = "admin";
     int sock_fd;
-    int relay;
     int command_socket = -1;
 
     if (!(*first_connection))
@@ -332,22 +392,6 @@ static void relay_worker(bool * const first_connection)
         goto done;
     }
     process_commands(command_socket, sock_fd);
-
-    for (;;)
-    {
-        for (relay = 0; relay < NUM_RELAYS; relay++)
-        {
-            if (!set_relay_state(sock_fd, relay, true))
-            {
-                goto done;
-            }
-            usleep(800000);
-            if (!set_relay_state(sock_fd, relay, false))
-            {
-                goto done;
-            }
-        }
-    }
 
 done:
     if (command_socket >= 0)
