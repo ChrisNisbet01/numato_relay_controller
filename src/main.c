@@ -15,6 +15,7 @@
 
 #define TELNET_PORT 23
 #define NUM_RELAYS 8
+#define PROMPT_WAIT_SECONDS 5
 
 static bool read_until_string_found(int const sock_fd, char const * const string)
 {
@@ -44,7 +45,9 @@ done:
     return string_found;
 }
 
-static bool wait_for_prompt(int const sock_fd, char const * const prompt)
+static bool wait_for_prompt(int const sock_fd, 
+                            char const * const prompt,
+                            unsigned int const maximum_wait_seconds)
 {
     bool got_prompt;
     char ch;
@@ -53,7 +56,7 @@ static bool wait_for_prompt(int const sock_fd, char const * const prompt)
 
     do
     {
-        read_result = read_with_telnet_handling(sock_fd, &ch, 1, 5);
+        read_result = read_with_telnet_handling(sock_fd, &ch, 1, maximum_wait_seconds);
         if (read_result != 1)
         {
             got_prompt = false;
@@ -106,25 +109,50 @@ done:
     return done_telnet;
 }
 
-static bool login_to_module(int const sock_fd, char const * const username, char const * const password)
+static bool set_relay_state(int const sock_fd, unsigned int const relay, bool const state)
+{
+    bool set_state;
+
+    if (dprintf(sock_fd, "relay %s %u\r\n", state ? "on" : "off", relay) < 0)
+    {
+        set_state = false;
+        goto done;
+    }
+    if (!wait_for_prompt(sock_fd, ">", PROMPT_WAIT_SECONDS))
+    {
+        set_state = false;
+        goto done;
+    }
+    set_state = true;
+
+done:
+    return set_state;
+}
+
+static bool relay_module_login(int const sock_fd, char const * const username, char const * const password)
 {
     bool logged_in;
 
-    if (!wait_for_prompt(sock_fd, "User Name: "))
+    if (!wait_for_prompt(sock_fd, "User Name: ", PROMPT_WAIT_SECONDS))
     {
         logged_in = false;
-        goto done; 
+        goto done;
     }
     if (dprintf(sock_fd, "%s\r\n", username) < 0)
     {
         logged_in = false;
         goto done;
     }
-    if (!wait_for_prompt(sock_fd, "Password: "))
+    if (!wait_for_prompt(sock_fd, "Password: ", PROMPT_WAIT_SECONDS))
     {
         logged_in = false;
         goto done;
     }
+
+    /* For some reason the relay module chooses this point to 
+     * issue some telnet commands, and fails authentication if we 
+     * don't respond to it. 
+     */
     if (!wait_for_telnet(sock_fd))
     {
         logged_in = false;
@@ -137,13 +165,16 @@ static bool login_to_module(int const sock_fd, char const * const username, char
         goto done;
     }
 
+    /* XXX - TODO - Also look for login failure message (access 
+     * denied?).
+     */
     if (!read_until_string_found(sock_fd, "Logged in successfully"))
     {
         logged_in = false;
         goto done;
     }
 
-    if (!wait_for_prompt(sock_fd, ">"))
+    if (!wait_for_prompt(sock_fd, ">", PROMPT_WAIT_SECONDS))
     {
         logged_in = false;
         goto done;
@@ -155,52 +186,19 @@ done:
     return logged_in;
 }
 
-static bool set_relay_state(int const sock_fd, unsigned int const relay, bool const state)
+static void relay_module_disconnect(int const relay_module_fd)
 {
-    bool set_state;
-
-    if (dprintf(sock_fd, "relay %s %u\r\n", state ? "on" : "off", relay) < 0)
+    if (relay_module_fd >= 0)
     {
-        set_state = false;
-        goto done;
+        fprintf(stderr, "disconnecting from relay module\n");
+        close(relay_module_fd);
     }
-    if (!wait_for_prompt(sock_fd, ">"))
-    {
-        set_state = false;
-        goto done;
-    }
-    set_state = true;
-
-done:
-    return set_state;
 }
 
-#if defined(SET_STATES_OFF_ON_STARTUP)
-static bool set_all_relay_states(int const sock_fd, bool const state)
-{
-    bool set_state;
-
-    if (dprintf(sock_fd, "relay writeall %s\r\n", state ? "ff" : "00") < 0)
-    {
-        set_state = false;
-        goto done;
-    }
-    if (!wait_for_prompt(sock_fd, ">"))
-    {
-        set_state = false;
-        goto done;
-    }
-    set_state = true;
-
-done:
-    return set_state;
-}
-#endif
-
-static int establish_connection_with_relay_module(char const * const address,
-                                                  int16_t const port, 
-                                                  char const * const username, 
-                                                  char const * const password)
+static int relay_module_connect(char const * const address,
+                                int16_t const port, 
+                                char const * const username, 
+                                char const * const password)
 {
     int sock_fd;
 
@@ -212,7 +210,7 @@ static int establish_connection_with_relay_module(char const * const address,
         goto done;
     }
     fprintf(stderr, "connected\n");
-    if (!login_to_module(sock_fd, username, password))
+    if (!relay_module_login(sock_fd, username, password))
     {
         close(sock_fd);
         sock_fd = -1;
@@ -254,6 +252,65 @@ static json_object * read_json_from_stream(int const fd, unsigned int const read
     return obj;
 }
 
+static bool parse_zone(json_object * const zone, unsigned int * const relay_id, bool * const state)
+{
+    bool parsed_zone;
+    json_object * object;
+    char const * state_value;
+
+    json_object_object_get_ex(zone, "state", &object);
+    if (object == NULL)
+    {
+        parsed_zone = false;
+        goto done;
+    }
+    state_value = json_object_get_string(object);
+
+    json_object_object_get_ex(zone, "id", &object);
+    if (object == NULL)
+    {
+        parsed_zone = false;
+        goto done;
+    }
+    *relay_id = json_object_get_int(object);
+
+    if (strcasecmp(state_value, "on") == 0)
+    {
+        *state = true;
+    }
+    else if (strcasecmp(state_value, "off") == 0)
+    {
+        *state = false;
+    }
+    else
+    {
+        parsed_zone = false;
+        goto done;
+    }
+    parsed_zone = true;
+
+done:
+    return parsed_zone;
+}
+
+static void process_zone(json_object * const zone, int const relay_fd)
+{
+    bool state;
+    unsigned int relay_id;
+
+    if (!parse_zone(zone,&relay_id, &state))
+    {
+        goto done;
+    }
+
+    fprintf(stderr, "set relay %d state %s\n", relay_id, state ? "on" : "off");
+
+    set_relay_state(relay_fd, relay_id, state);
+
+done:
+    return;
+}
+
 static void process_json_message(json_object * const message, int const relay_fd)
 {
     json_object * params;
@@ -277,135 +334,126 @@ static void process_json_message(json_object * const message, int const relay_fd
     for (index = 0; index < num_zones; index++)
     {
         json_object * const zone = json_object_array_get_idx(zones_array, index);
-        json_object * object;
-        char const * state_value;
-        char relay_id;
 
-        json_object_object_get_ex(zone, "state", &object);
-        if (object == NULL)
-        {
-            continue;
-        }
-        state_value = json_object_get_string(object);
-
-        json_object_object_get_ex(zone, "id", &object);
-        if (object == NULL)
-        {
-            continue;
-        }
-        relay_id = json_object_get_int(object);
-        fprintf(stderr, "relay id %u to state %s\n", relay_id, state_value);
-        if (strcasecmp(state_value, "on") == 0)
-        {
-            set_relay_state(relay_fd, relay_id, true);
-        }
-        else if (strcasecmp(state_value, "off") == 0)
-        {
-            set_relay_state(relay_fd, relay_id, false);
-        }
+        process_zone(zone, relay_fd);
     }
+    fprintf(stderr, "\n");
 
 done:
     return;
 }
-static bool process_commands(int const command_fd, int const relay_fd)
+
+typedef struct relay_module_info_st
 {
+    char const * address;
+    uint16_t port;
+    char const * username;
+    char const * password;
+} relay_module_info_st;
+
+static bool process_commands(int const command_fd, relay_module_info_st const * const relay_module_info)
+{
+    int relay_fd = -1;
     fd_set fds;
     unsigned int num_fds;
     bool had_error;
+    json_object * message = NULL; 
 
     FD_ZERO(&fds);
     FD_SET(command_fd, &fds);
     num_fds = command_fd + 1;
 
-    /* XXX - TODO - reqork so that the connection to the relay 
-     * module is only established once we received a message. 
-     * If no message is received for a period of time we may as well 
-     * close the connection to the relay module. 
-     */
     for (;;)
     {
         int sockets_waiting;
         int msg_sock;
-        json_object * message;
-        sockets_waiting = TEMP_FAILURE_RETRY(select(num_fds, &fds, NULL, NULL, NULL));
+        struct timeval timeout;
+
+        timeout.tv_sec = 60;
+        timeout.tv_usec = 0;
+
+        sockets_waiting = TEMP_FAILURE_RETRY(select(num_fds, &fds, NULL, NULL, &timeout));
         if (sockets_waiting == -1)
         {
             had_error = true;
             goto done;
         }
-
-        msg_sock = TEMP_FAILURE_RETRY(accept(command_fd, 0, 0));
-        if (msg_sock == -1)
+        else if (sockets_waiting == 0) /* Timeout. */
         {
-            had_error = true;
-            goto done;
+            relay_module_disconnect(relay_fd);
+            relay_fd = -1;
         }
+        else
+        {
+            msg_sock = TEMP_FAILURE_RETRY(accept(command_fd, 0, 0));
+            if (msg_sock == -1)
+            {
+                had_error = true;
+                goto done;
+            }
 
-        message = read_json_from_stream(msg_sock, 5);
+            message = read_json_from_stream(msg_sock, 5);
+            close(msg_sock);
 
-        process_json_message(message, relay_fd);
+            if (message == NULL)
+            {
+                had_error = true;
+                goto done;
+            }
 
-        json_object_put(message);
+            if (relay_fd == -1)
+            {
+                relay_fd = relay_module_connect(relay_module_info->address, 
+                                                relay_module_info->port, 
+                                                relay_module_info->username, 
+                                                relay_module_info->password);
+                if (relay_fd == -1)
+                {
+                    fprintf(stderr, "failed to connect to relay module\n");
+                    had_error = true;
+                    goto done;
+                }
+            }
+            if (relay_fd >= 0)
+            {
+                process_json_message(message, relay_fd);
+            }
+            json_object_put(message);
+            message = NULL;
+        }
     }
 
     had_error = false;
 
 done:
+    json_object_put(message);
+    relay_module_disconnect(relay_fd);
+
     return had_error;
 }
 
-static void relay_worker(bool * const first_connection, char const * const module_address)
+static void relay_worker(relay_module_info_st const * const relay_module_info)
 {
-    int16_t module_port = TELNET_PORT;
-    char const * const module_username = "admin";
-    char const * const module_password = "admin";
-    int sock_fd;
     int command_socket = -1;
 
-    if (!(*first_connection))
-    {
-        usleep(500000);
-    }
-    *first_connection = false;
-
-    sock_fd = establish_connection_with_relay_module(module_address, module_port, module_username, module_password);
-
-    if (sock_fd < 0)
-    {
-        fprintf(stderr, "failed to connect to relay module\n");
-        goto done;
-    }
-
-#if defined(SET_STATES_OFF_ON_STARTUP)
-    if (!set_all_relay_states(sock_fd, false))
-    {
-        fprintf(stderr, "Error setting all relays off\n");
-        goto done;
-    }
-#endif
-    command_socket = listen_on_socket("LIGHTING_REQUESTS", true);
-    fprintf(stderr, "command listener %d\n", command_socket);
+    command_socket = listen_on_unix_socket("LIGHTING_REQUESTS", true);
     if (command_socket < 0)
     {
         goto done;
     }
-    process_commands(command_socket, sock_fd);
+
+    process_commands(command_socket, relay_module_info);
 
 done:
-    if (command_socket >= 0)
-    {
-        close(command_socket);
-    }
-    if (sock_fd >= 0)
-    {
-        close(sock_fd);
-    }
+    close_connection_to_unix_socket(command_socket);
 }
 
 int main(int argc, char * * argv)
 {
-    bool first_connection = true;
+    int16_t const module_port = TELNET_PORT;
+    char const * const module_username = "admin";
+    char const * const module_password = "admin";
+    relay_module_info_st relay_module_info;
 
     if (argc < 2)
     {
@@ -414,7 +462,14 @@ int main(int argc, char * * argv)
     }
     for (;;)
     {
-        relay_worker(&first_connection, argv[1]);
+        relay_module_info.address = argv[1];
+        relay_module_info.port = module_port;
+        relay_module_info.username = module_username;
+        relay_module_info.password = module_password;
+
+        relay_worker(&relay_module_info);
+
+        usleep(500000); /* This is just so that we don't retry failing connections too quickly. */
     }
 
     return 0;

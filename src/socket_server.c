@@ -46,7 +46,7 @@ done:
     return result;
 }
 
-int listen_on_socket(char const * const socket_name, bool use_abstract_namespace)
+int listen_on_unix_socket(char const * const socket_name, bool use_abstract_namespace)
 {
     int sock;
     bool had_error;
@@ -100,4 +100,11 @@ done:
     return sock;
 }
 
+void close_connection_to_unix_socket(int const sock_fd)
+{
+    if (sock_fd >= 0)
+    {
+        close(sock_fd);
+    }
+}
 
