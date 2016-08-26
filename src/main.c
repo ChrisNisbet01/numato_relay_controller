@@ -12,10 +12,81 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #define TELNET_PORT 23
 #define NUM_RELAYS 8
 #define PROMPT_WAIT_SECONDS 5
+#define JSON_MESSAGE_READ_TIMEOUT_SECONDS 5
+#define MAXIMUM_SECONDS_BETWEEN_RELAY_MODULE_UPDATES 120
+
+typedef struct relay_module_info_st
+{
+    char const * address;
+    uint16_t port;
+    char const * username;
+    char const * password;
+} relay_module_info_st; 
+
+#define BIT(x) (1UL << (x))
+
+typedef struct relay_states_st
+{
+    bool states_written;
+    unsigned int current_states; /* Bitmask of the current relay states. */
+    time_t last_written;
+} relay_states_st;
+
+typedef struct relay_command_st
+{
+    unsigned int states_modified; /* Bitmask of relay outputs to be commanded */
+    unsigned int desired_states; /* Bitmask of the desired states. */
+} relay_command_st;
+
+static relay_states_st relay_states;
+
+static void relay_command_init(relay_command_st * const relay_command)
+{
+    relay_command->states_modified = 0;
+    relay_command->desired_states = 0;
+}
+
+static void relay_command_set_state(relay_command_st * const relay_command, unsigned int relay_index, bool const state)
+{
+    relay_command->states_modified |= BIT(relay_index);
+    if (state)
+    {
+        relay_command->desired_states |= BIT(relay_index);
+    }
+    else
+    {
+        relay_command->desired_states &= ~BIT(relay_index);
+    }
+}
+
+static unsigned int get_writeall_command_bitmask(relay_states_st const * const relay_states, 
+                                                 relay_command_st const * const relay_command)
+{
+    unsigned int writeall_bitmask;
+
+    fprintf(stderr, 
+            "current 0x%x, modified 0x%x desired 0x%x\n", 
+            relay_states->current_states, 
+            relay_command->states_modified, 
+            relay_command->desired_states);
+
+    /* First get the current states of the relays that weren't 
+     * modified by the relay_command. 
+     */
+    writeall_bitmask = relay_states->current_states & ~relay_command->states_modified;
+    /* Now assign the new desired states. */
+    writeall_bitmask |= relay_command->desired_states;
+
+    fprintf(stderr, "bitmask 0x%x\n", writeall_bitmask);
+
+    return writeall_bitmask;
+}
+
 
 static bool read_until_string_found(int const sock_fd, char const * const string)
 {
@@ -109,6 +180,28 @@ done:
     return done_telnet;
 }
 
+static bool set_all_relay_states(int const sock_fd, unsigned int const writeall_bitmask)
+{
+    bool set_state;
+
+    fprintf(stderr, "sending writeall command %x\n", writeall_bitmask);
+    if (dprintf(sock_fd, "relay writeall %02x\r\n", writeall_bitmask) < 0)
+    {
+        set_state = false;
+        goto done;
+    }
+    if (!wait_for_prompt(sock_fd, ">", PROMPT_WAIT_SECONDS))
+    {
+        set_state = false;
+        goto done;
+    }
+    set_state = true;
+
+done:
+    return set_state;
+}
+
+#if defined NEED_SET_RELAY_STATE
 static bool set_relay_state(int const sock_fd, unsigned int const relay, bool const state)
 {
     bool set_state;
@@ -128,6 +221,7 @@ static bool set_relay_state(int const sock_fd, unsigned int const relay, bool co
 done:
     return set_state;
 }
+#endif
 
 static bool relay_module_login(int const sock_fd, char const * const username, char const * const password)
 {
@@ -293,26 +387,27 @@ done:
     return parsed_zone;
 }
 
-static void process_zone(json_object * const zone, int const relay_fd)
+static void process_zone(json_object * const zone, relay_command_st * const relay_command)
 {
     bool state;
     unsigned int relay_id;
 
-    if (!parse_zone(zone,&relay_id, &state))
+    if (!parse_zone(zone, &relay_id, &state))
     {
         goto done;
     }
 
     fprintf(stderr, "set relay %d state %s\n", relay_id, state ? "on" : "off");
 
-    set_relay_state(relay_fd, relay_id, state);
+    relay_command_set_state(relay_command, relay_id, state);
 
 done:
     return;
 }
 
-static void process_json_message(json_object * const message, int const relay_fd)
+static bool populate_relay_command_from_message(json_object * const message, relay_command_st * const relay_command)
 {
+    bool relay_command_populated;
     json_object * params;
     json_object * zones_array;
     int num_zones;
@@ -321,62 +416,219 @@ static void process_json_message(json_object * const message, int const relay_fd
     json_object_object_get_ex(message, "params", &params);
     if (params == NULL)
     {
+        relay_command_populated = false;
         goto done;
     }
     json_object_object_get_ex(params, "zones", &zones_array);
 
     if (json_object_get_type(zones_array) != json_type_array)
     {
+        relay_command_populated = false;
         goto done;
     }
     num_zones = json_object_array_length(zones_array);
+
+
+    relay_command_init(relay_command);
 
     for (index = 0; index < num_zones; index++)
     {
         json_object * const zone = json_object_array_get_idx(zones_array, index);
 
-        process_zone(zone, relay_fd);
+        process_zone(zone, relay_command);
     }
+
+    relay_command_populated = true; 
+
+done:
+    return relay_command_populated;
+}
+
+static bool update_relay_states(relay_states_st * const relay_states,
+                                unsigned int const writeall_bitmask,
+                                relay_module_info_st const * const relay_module_info,
+                                int * const relay_fd)
+{
+    bool updated_states;
+
+    if (*relay_fd == -1)
+    {
+        fprintf(stderr, "need to connect to relay module\n");
+        *relay_fd = relay_module_connect(relay_module_info->address,
+                                         relay_module_info->port,
+                                         relay_module_info->username,
+                                         relay_module_info->password);
+        if (*relay_fd == -1)
+        {
+            fprintf(stderr, "failed to connect to relay module\n");
+            updated_states = false;
+            goto done;
+        }
+    }
+    if (!set_all_relay_states(*relay_fd, writeall_bitmask))
+    {
+        updated_states = false;
+        goto done;
+    }
+
+    updated_states = true; 
+
+done:
+    return updated_states;
+}
+
+static void relay_command_perform(relay_states_st * const relay_states,
+                                  relay_command_st const * const relay_command,
+                                  relay_module_info_st const * const relay_module_info,
+                                  int * const relay_fd)
+{
+    unsigned int writeall_bitmask;
+    bool need_to_write_states;
+
+    writeall_bitmask = get_writeall_command_bitmask(relay_states, relay_command);
+
+    if (writeall_bitmask != relay_states->current_states)
+    {
+        need_to_write_states = true;
+    }
+    else if (!relay_states->states_written)
+    {
+        need_to_write_states = true;
+    }
+    else if (writeall_bitmask != 0 
+             && difftime(time(NULL), relay_states->last_written) >= MAXIMUM_SECONDS_BETWEEN_RELAY_MODULE_UPDATES)
+    {
+        fprintf(stderr, "inactivity_update\n");
+        need_to_write_states = true;
+    }
+    else
+    {
+        need_to_write_states = false;
+    }
+
+    /* TODO: Update if the desired states are non-zero and it's 
+     * been a few minutes since the last update to ensure that the 
+     * relays are restored to the desired state if the module has 
+     * reset or something. 
+     */
+    if (need_to_write_states)
+    {
+        if (!update_relay_states(relay_states, writeall_bitmask, relay_module_info, relay_fd))
+        {
+            goto done;
+        }
+        /* Update the current states after the new states have been 
+         * successfully written to the module. 
+         */
+        relay_states->current_states = writeall_bitmask;
+        relay_states->states_written = true;
+        relay_states->last_written = time(NULL);
+    }
+
+done:
+    return;
+}
+
+static void process_set_state_message(json_object * const message, 
+                                      relay_module_info_st const * const relay_module_info,
+                                      int * const relay_fd)
+{
+    relay_command_st relay_command;
+
+    fprintf(stderr, "processing 'set state' message\n");
+
+    if (!populate_relay_command_from_message(message, &relay_command))
+    {
+        goto done;
+    }
+    relay_command_perform(&relay_states, &relay_command, relay_module_info, relay_fd);
+
     fprintf(stderr, "\n");
 
 done:
     return;
 }
 
-typedef struct relay_module_info_st
+static void process_json_message(json_object * const message, 
+                                 int const msg_fd, 
+                                 relay_module_info_st const * const relay_module_info,
+                                 int * const relay_fd)
 {
-    char const * address;
-    uint16_t port;
-    char const * username;
-    char const * password;
-} relay_module_info_st;
+    json_object * json_method;
+    char const * method_string;
 
-static bool process_commands(int const command_fd, relay_module_info_st const * const relay_module_info)
+    fprintf(stderr, "processing json message\n");
+    json_object_object_get_ex(message, "method", &json_method);
+    if (json_method == NULL)
+    {
+        goto done;
+    }
+    method_string = json_object_get_string(json_method);
+
+    if (strcasecmp(method_string, "set state") == 0)
+    {
+        process_set_state_message(message, relay_module_info, relay_fd);
+    }
+
+done:
+    return;
+}
+
+static void process_new_command(int const command_fd, 
+                                relay_module_info_st const * const relay_module_info, 
+                                int * const relay_fd)
+{
+    json_object * message = NULL;
+    int msg_sock = -1;
+
+    msg_sock = TEMP_FAILURE_RETRY(accept(command_fd, 0, 0));
+    if (msg_sock == -1)
+    {
+        goto done;
+    }
+
+    message = read_json_from_stream(msg_sock, JSON_MESSAGE_READ_TIMEOUT_SECONDS);
+
+    if (message == NULL)
+    {
+        goto done;
+    }
+
+    process_json_message(message, msg_sock, relay_module_info, relay_fd);
+
+done:
+    if (msg_sock != -1)
+    {
+        close(msg_sock);
+    }
+    json_object_put(message);
+
+}
+
+static void process_commands(int const command_fd, relay_module_info_st const * const relay_module_info)
 {
     int relay_fd = -1;
     fd_set fds;
     unsigned int num_fds;
-    bool had_error;
-    json_object * message = NULL; 
+    bool had_error = false;
 
-    FD_ZERO(&fds);
-    FD_SET(command_fd, &fds);
-    num_fds = command_fd + 1;
-
-    for (;;)
+    for (; !had_error;)
     {
         int sockets_waiting;
-        int msg_sock;
         struct timeval timeout;
 
-        timeout.tv_sec = 60;
+        timeout.tv_sec = 20;
         timeout.tv_usec = 0;
 
+        FD_ZERO(&fds);
+        FD_SET(command_fd, &fds);
+        num_fds = command_fd + 1; 
+
         sockets_waiting = TEMP_FAILURE_RETRY(select(num_fds, &fds, NULL, NULL, &timeout));
+        fprintf(stderr, "sockets waiting: %d\n", sockets_waiting);
         if (sockets_waiting == -1)
         {
             had_error = true;
-            goto done;
         }
         else if (sockets_waiting == 0) /* Timeout. */
         {
@@ -385,51 +637,13 @@ static bool process_commands(int const command_fd, relay_module_info_st const * 
         }
         else
         {
-            msg_sock = TEMP_FAILURE_RETRY(accept(command_fd, 0, 0));
-            if (msg_sock == -1)
-            {
-                had_error = true;
-                goto done;
-            }
-
-            message = read_json_from_stream(msg_sock, 5);
-            close(msg_sock);
-
-            if (message == NULL)
-            {
-                had_error = true;
-                goto done;
-            }
-
-            if (relay_fd == -1)
-            {
-                relay_fd = relay_module_connect(relay_module_info->address, 
-                                                relay_module_info->port, 
-                                                relay_module_info->username, 
-                                                relay_module_info->password);
-                if (relay_fd == -1)
-                {
-                    fprintf(stderr, "failed to connect to relay module\n");
-                    had_error = true;
-                    goto done;
-                }
-            }
-            if (relay_fd >= 0)
-            {
-                process_json_message(message, relay_fd);
-            }
-            json_object_put(message);
-            message = NULL;
+            process_new_command(command_fd, relay_module_info, &relay_fd);
         }
     }
 
-    had_error = false;
-
-done:
-    json_object_put(message);
     relay_module_disconnect(relay_fd);
 
-    return had_error;
+    return;
 }
 
 static void relay_worker(relay_module_info_st const * const relay_module_info)
