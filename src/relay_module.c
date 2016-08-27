@@ -112,16 +112,7 @@ done:
 }
 #endif
 
-void relay_module_disconnect(int const relay_module_fd)
-{
-    if (relay_module_fd >= 0)
-    {
-        fprintf(stderr, "disconnecting from relay module\n");
-        close(relay_module_fd);
-    }
-}
-
-int relay_module_connect(char const * const address,
+static int relay_module_connect(char const * const address,
                                 int16_t const port,
                                 char const * const username,
                                 char const * const password)
@@ -145,6 +136,15 @@ int relay_module_connect(char const * const address,
 
 done:
     return sock_fd;
+}
+
+void relay_module_disconnect(int const relay_module_fd)
+{
+    if (relay_module_fd >= 0)
+    {
+        fprintf(stderr, "disconnecting from relay module\n");
+        close(relay_module_fd);
+    }
 }
 
 bool update_relay_module(unsigned int const writeall_bitmask,

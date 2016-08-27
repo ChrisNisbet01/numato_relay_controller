@@ -13,10 +13,6 @@ typedef struct relay_module_info_st
 } relay_module_info_st; 
 
 void relay_module_disconnect(int const relay_module_fd);
-int relay_module_connect(char const * const address,
-                         int16_t const port,
-                         char const * const username,
-                         char const * const password);
 bool update_relay_module(unsigned int const writeall_bitmask,
                          relay_module_info_st const * const relay_module_info,
                          int * const relay_fd);
