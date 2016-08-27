@@ -4,6 +4,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef struct relay_module_info_st
+{
+    char const * address;
+    uint16_t port;
+    char const * username;
+    char const * password;
+} relay_module_info_st; 
+
 bool relay_module_set_all_relay_states(int const sock_fd, unsigned int const writeall_bitmask);
 #if defined NEED_SET_RELAY_STATE
 bool relay_module_set_relay_state(int const sock_fd, unsigned int const relay, bool const state);
