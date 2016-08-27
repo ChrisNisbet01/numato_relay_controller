@@ -69,23 +69,22 @@ static bool need_to_update_module(relay_state_ctx_st const * const relay_state_c
     return need_to_write_states;
 }
 
-static void relay_states_update_module(relay_state_ctx_st * const relay_state_ctx,
-                                relay_states_st const * const relay_states,
-                                relay_module_info_st const * const relay_module_info,
-                                int * const relay_fd)
+static void relay_states_update_module(relay_states_st const * const relay_states,
+                                       relay_module_info_st const * const relay_module_info,
+                                       int * const relay_fd)
 {
     unsigned int writeall_bitmask;
     bool need_to_write_states;
     relay_states_st * desired_states;
 
-    desired_states = relay_states_combine(relay_state_ctx->current_states, relay_states);
+    desired_states = relay_states_combine(relay_state_ctx.current_states, relay_states);
     if (desired_states == NULL)
     {
         goto done;
     }
     writeall_bitmask = relay_states_get_states_bitmask(desired_states);
 
-    need_to_write_states = need_to_update_module(relay_state_ctx, writeall_bitmask);
+    need_to_write_states = need_to_update_module(&relay_state_ctx, writeall_bitmask);
 
     if (need_to_write_states)
     {
@@ -96,10 +95,10 @@ static void relay_states_update_module(relay_state_ctx_st * const relay_state_ct
         /* Update the current states after the new states have been 
          * successfully written to the module. 
          */
-        relay_states_free(relay_state_ctx->current_states);
-        relay_state_ctx->current_states = desired_states;
+        relay_states_free(relay_state_ctx.current_states);
+        relay_state_ctx.current_states = desired_states;
         desired_states = NULL;
-        relay_state_ctx->last_written = time(NULL);
+        relay_state_ctx.last_written = time(NULL);
     }
 
 done:
@@ -112,8 +111,7 @@ static void set_state_handler(void * const user_info, relay_states_st * const de
 {
     message_handler_info_st * info = user_info;
 
-    relay_states_update_module(&relay_state_ctx, 
-                               desired_relay_states, 
+    relay_states_update_module(desired_relay_states, 
                                info->relay_module_info, 
                                info->relay_fd);
 
@@ -190,7 +188,9 @@ done:
 }
 
 static void relay_module_info_get(relay_module_info_st * const relay_module_info, 
-                                  char const * const module_address)
+                                  char const * const module_address,
+                                  char const * const username,
+                                  char const * const password)
 {
     int16_t const module_port = TELNET_PORT;
     char const * const module_username = "admin";
@@ -198,8 +198,8 @@ static void relay_module_info_get(relay_module_info_st * const relay_module_info
 
     relay_module_info->address = module_address;
     relay_module_info->port = module_port;
-    relay_module_info->username = module_username;
-    relay_module_info->password = module_password;
+    relay_module_info->username = username != NULL ? username : module_username;
+    relay_module_info->password = password != NULL ? password : module_password;
 }
 
 int main(int argc, char * * argv)
@@ -208,10 +208,13 @@ int main(int argc, char * * argv)
 
     if (argc < 2)
     {
-        fprintf(stderr, "Format: %s <module address>\n", argv[0]);
+        fprintf(stderr, "Format: %s <module address> [<username>] [<password>]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    relay_module_info_get(&relay_module_info, argv[1]);
+    relay_module_info_get(&relay_module_info, 
+                          argv[1], 
+                          argc > 2 ? argv[2] : NULL,
+                          argc > 3 ? argv[3] : NULL);
     for (;;)
     {
         relay_worker(&relay_module_info);

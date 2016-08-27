@@ -61,6 +61,11 @@ static bool relay_module_login(int const sock_fd, char const * const username, c
     logged_in = true;
 
 done:
+    if (!logged_in)
+    {
+        fprintf(stderr, "login failed\n");
+    }
+
     return logged_in;
 }
 
@@ -157,7 +162,6 @@ bool update_relay_module(unsigned int const writeall_bitmask,
                                          relay_module_info->password);
         if (*relay_fd == -1)
         {
-            fprintf(stderr, "failed to connect to relay module\n");
             updated_states = false;
             goto done;
         }
