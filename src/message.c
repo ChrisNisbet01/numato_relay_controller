@@ -1,5 +1,6 @@
 #include "message.h"
 #include "relay_states.h"
+#include "message_handler.h"
 
 #include <get_char_with_timeout.h>
 
@@ -11,115 +12,13 @@
 #include <unistd.h>
 
 #define JSON_MESSAGE_READ_TIMEOUT_SECONDS 5
-#define MAXIMUM_SECONDS_BETWEEN_RELAY_MODULE_UPDATES 120
 
-typedef struct relay_state_ctx_st
-{
-    bool states_written;
-    relay_states_st current_states;
-    time_t last_written;
-} relay_state_ctx_st;
-
-static relay_state_ctx_st relay_state_ctx; 
-
-static bool update_relay_module(unsigned int const writeall_bitmask,
-                                relay_module_info_st const * const relay_module_info,
-                                int * const relay_fd)
-{
-    bool updated_states;
-
-    if (*relay_fd == -1)
-    {
-        fprintf(stderr, "need to connect to relay module\n");
-        *relay_fd = relay_module_connect(relay_module_info->address,
-                                         relay_module_info->port,
-                                         relay_module_info->username,
-                                         relay_module_info->password);
-        if (*relay_fd == -1)
-        {
-            fprintf(stderr, "failed to connect to relay module\n");
-            updated_states = false;
-            goto done;
-        }
-    }
-    if (!relay_module_set_all_relay_states(*relay_fd, writeall_bitmask))
-    {
-        fprintf(stderr, "Failed to update module. Closing socket\n");
-        relay_module_disconnect(*relay_fd);
-        *relay_fd = -1;
-        updated_states = false;
-        goto done;
-    }
-
-    updated_states = true;
-
-done:
-    return updated_states;
-}
-
-static bool need_to_update_module(relay_state_ctx_st const * const relay_state_ctx,
-                                  unsigned int const writeall_bitmask)
-{
-    bool need_to_write_states;
-
-    if (writeall_bitmask != relay_states_get_writeall_bitmask(&relay_state_ctx->current_states))
-    {
-        need_to_write_states = true;
-    }
-    else if (!relay_state_ctx->states_written)
-    {
-        need_to_write_states = true;
-    }
-    else if (writeall_bitmask != 0
-             && difftime(time(NULL), relay_state_ctx->last_written) >= MAXIMUM_SECONDS_BETWEEN_RELAY_MODULE_UPDATES)
-    {
-        /* This will ensure that if the relay module restarts and we 
-         * want some relays to be on that we'll always turn them on 
-         * again within a few minutes, assuming we can communicate 
-         * with the module. 
-         */
-        need_to_write_states = true;
-    }
-    else
-    {
-        need_to_write_states = false;
-    }
-
-    return need_to_write_states;
-}
-
-static void relay_states_update_module(relay_state_ctx_st * const relay_state_ctx,
-                                       relay_states_st const * const relay_states,
-                                       relay_module_info_st const * const relay_module_info,
-                                       int * const relay_fd)
-{
-    unsigned int writeall_bitmask;
-    bool need_to_write_states;
-    relay_states_st desired_states;
-
-    relay_states_combine(&relay_state_ctx->current_states, relay_states, &desired_states);
-
-    writeall_bitmask = relay_states_get_writeall_bitmask(&desired_states);
-
-    need_to_write_states = need_to_update_module(relay_state_ctx, writeall_bitmask);
-
-    if (need_to_write_states)
-    {
-        if (!update_relay_module(writeall_bitmask, relay_module_info, relay_fd))
-        {
-            goto done;
-        }
-        /* Update the current states after the new states have been 
-         * successfully written to the module. 
-         */
-        relay_state_ctx->current_states = desired_states;
-        relay_state_ctx->states_written = true;
-        relay_state_ctx->last_written = time(NULL);
-    }
-
-done:
-    return;
-}
+static char const relay_params_array_name[] = "relays";
+static char const relay_state_field_name[] = "state";
+static char const relay_id_field_name[] = "id";
+static char const relay_state_on_string[] = "on";
+static char const relay_state_off_string[] = "off";
+static char const relay_method_set_state_string[] = "set state"; 
 
 static json_object * read_json_from_stream(int const fd, unsigned int const read_timeout_seconds)
 {
@@ -158,7 +57,7 @@ static bool parse_zone(json_object * const zone, unsigned int * const relay_id, 
     json_object * object;
     char const * state_value;
 
-    json_object_object_get_ex(zone, "state", &object);
+    json_object_object_get_ex(zone, relay_state_field_name, &object);
     if (object == NULL)
     {
         parsed_zone = false;
@@ -166,7 +65,7 @@ static bool parse_zone(json_object * const zone, unsigned int * const relay_id, 
     }
     state_value = json_object_get_string(object);
 
-    json_object_object_get_ex(zone, "id", &object);
+    json_object_object_get_ex(zone, relay_id_field_name, &object);
     if (object == NULL)
     {
         parsed_zone = false;
@@ -211,13 +110,14 @@ done:
     return;
 }
 
-static bool populate_relay_states_from_message(json_object * const message, relay_states_st * const relay_states)
+static relay_states_st * get_desired_relay_states_from_message(json_object * const message)
 {
     bool relay_states_populated;
     json_object * params;
     json_object * zones_array;
     int num_zones;
     int index;
+    relay_states_st * relay_states = NULL;
 
     json_object_object_get_ex(message, "params", &params);
     if (params == NULL)
@@ -225,7 +125,7 @@ static bool populate_relay_states_from_message(json_object * const message, rela
         relay_states_populated = false;
         goto done;
     }
-    json_object_object_get_ex(params, "zones", &zones_array);
+    json_object_object_get_ex(params, relay_params_array_name, &zones_array);
 
     if (json_object_get_type(zones_array) != json_type_array)
     {
@@ -234,8 +134,12 @@ static bool populate_relay_states_from_message(json_object * const message, rela
     }
     num_zones = json_object_array_length(zones_array);
 
-
-    relay_states_init(relay_states);
+    relay_states = relay_states_create();
+    if (relay_states == NULL)
+    {
+        relay_states_populated = false;
+        goto done;
+    }
 
     for (index = 0; index < num_zones; index++)
     {
@@ -247,38 +151,52 @@ static bool populate_relay_states_from_message(json_object * const message, rela
     relay_states_populated = true;
 
 done:
-    return relay_states_populated;
+    if (!relay_states_populated)
+    {
+        relay_states_free(relay_states);
+        relay_states = NULL;
+    }
+
+    return relay_states;
 }
 
 static void process_set_state_message(json_object * const message,
-                                      relay_module_info_st const * const relay_module_info,
-                                      int * const relay_fd)
+                                      message_handler_st const * const handlers,
+                                      void * const user_info)
 {
-    relay_states_st relay_states;
+    relay_states_st * relay_states;
 
     fprintf(stderr, "processing 'set state' message\n");
 
-    if (!populate_relay_states_from_message(message, &relay_states))
+    relay_states = get_desired_relay_states_from_message(message);
+    if (relay_states == NULL)
     {
         goto done;
     }
-    relay_states_update_module(&relay_state_ctx, &relay_states, relay_module_info, relay_fd);
 
-    fprintf(stderr, "\n");
+    if (handlers->set_state_handler != NULL)
+    {
+        handlers->set_state_handler(user_info, relay_states);
+    }
 
 done:
+    relay_states_free(relay_states);
+
     return;
 }
 
 static void process_json_message(json_object * const message,
                                  int const msg_fd,
-                                 relay_module_info_st const * const relay_module_info,
-                                 int * const relay_fd)
+                                 message_handler_st const * const handlers,
+                                 void * const user_info)
 {
     json_object * json_method;
     char const * method_string;
 
-    fprintf(stderr, "processing json message\n");
+    /* msg_fd is passed so that in the future we can write 
+     * responses back to the sender. 
+     */
+
     json_object_object_get_ex(message, "method", &json_method);
     if (json_method == NULL)
     {
@@ -286,9 +204,9 @@ static void process_json_message(json_object * const message,
     }
     method_string = json_object_get_string(json_method);
 
-    if (strcasecmp(method_string, "set state") == 0)
+    if (strcasecmp(method_string, relay_method_set_state_string) == 0)
     {
-        process_set_state_message(message, relay_module_info, relay_fd);
+        process_set_state_message(message, handlers, user_info);
     }
 
 done:
@@ -296,8 +214,8 @@ done:
 }
 
 void process_new_command(int const msg_sock,
-                         relay_module_info_st const * const relay_module_info,
-                         int * const relay_fd)
+                         message_handler_st const * const handlers,
+                         void * const user_info)
 {
     json_object * message = NULL;
 
@@ -308,7 +226,7 @@ void process_new_command(int const msg_sock,
         goto done;
     }
 
-    process_json_message(message, msg_sock, relay_module_info, relay_fd);
+    process_json_message(message, msg_sock, handlers, user_info);
 
 done:
     if (msg_sock != -1)

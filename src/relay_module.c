@@ -64,7 +64,7 @@ done:
     return logged_in;
 }
 
-bool relay_module_set_all_relay_states(int const sock_fd, unsigned int const writeall_bitmask)
+static bool relay_module_set_all_relay_states(int const sock_fd, unsigned int const writeall_bitmask)
 {
     bool set_states;
 
@@ -86,7 +86,7 @@ done:
 }
 
 #if defined NEED_SET_RELAY_STATE
-bool relay_module_set_relay_state(int const sock_fd, unsigned int const relay, bool const state)
+static bool relay_module_set_relay_state(int const sock_fd, unsigned int const relay, bool const state)
 {
     bool set_state;
 
@@ -140,6 +140,41 @@ int relay_module_connect(char const * const address,
 
 done:
     return sock_fd;
+}
+
+bool update_relay_module(unsigned int const writeall_bitmask,
+                         relay_module_info_st const * const relay_module_info,
+                         int * const relay_fd)
+{
+    bool updated_states;
+
+    if (*relay_fd == -1)
+    {
+        fprintf(stderr, "need to connect to relay module\n");
+        *relay_fd = relay_module_connect(relay_module_info->address,
+                                         relay_module_info->port,
+                                         relay_module_info->username,
+                                         relay_module_info->password);
+        if (*relay_fd == -1)
+        {
+            fprintf(stderr, "failed to connect to relay module\n");
+            updated_states = false;
+            goto done;
+        }
+    }
+    if (!relay_module_set_all_relay_states(*relay_fd, writeall_bitmask))
+    {
+        fprintf(stderr, "Failed to update module. Closing socket\n");
+        relay_module_disconnect(*relay_fd);
+        *relay_fd = -1;
+        updated_states = false;
+        goto done;
+    }
+
+    updated_states = true;
+
+done:
+    return updated_states;
 }
 
 
