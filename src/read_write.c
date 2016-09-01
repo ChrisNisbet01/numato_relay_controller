@@ -4,25 +4,48 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
-bool read_until_string_found(int const sock_fd, char const * const string)
+bool read_until_string_found(int const sock_fd, char const * const success_string, char const * const failure_string)
 {
     bool string_found;
     char * line = NULL;
     size_t line_length = 0;
-    size_t const string_len = strlen(string);
+    size_t const success_string_len = strlen(success_string);
+    size_t const failure_string_len = strlen(failure_string);
+    time_t start_time = time(NULL);
+    unsigned int const timeout_seconds = 5;
 
     do
     {
-        if (read_line_with_timeout(&line, &line_length, sock_fd, 5) < 0)
+        time_t check_time;
+
+        if (read_line_with_timeout(&line, &line_length, sock_fd, timeout_seconds) < 0)
         {
             string_found = false;
             goto done;
         }
-        if (strncmp(line, string, string_len) == 0)
+
+        /* Ensure the total time taken hasn't been too long. */
+        check_time = time(NULL);
+        if ((check_time - start_time) >= timeout_seconds)
+        {
+            string_found = false;
+            goto done;
+        }
+
+        if (strncmp(line, success_string, success_string_len) == 0)
         {
             string_found = true;
             goto done;
+        }
+        if (failure_string != NULL)
+        {
+            if (strncmp(line, failure_string, failure_string_len) == 0)
+            {
+                string_found = false;
+                goto done;
+            }
         }
     }
     while (1);
@@ -34,8 +57,8 @@ done:
 }
 
 bool wait_for_prompt(int const sock_fd,
-                            char const * const prompt,
-                            unsigned int const maximum_wait_seconds)
+                     char const * const prompt,
+                     unsigned int const maximum_wait_seconds)
 {
     bool got_prompt;
     char ch;

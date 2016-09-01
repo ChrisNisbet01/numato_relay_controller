@@ -1,0 +1,73 @@
+Command set for the 8 relay ethernet module.
+
+No.	Command	Parameters	Example	Description
+1	ver	None	ver	Returns firmware Version
+2	id	get/set xxxxxxxx	id get, id set 12345678 	Reads/Sets id of the module
+3	usr 	get/set xxxxxxxx	usr get, usr set admin 	Reads/Sets user name
+4	pass 	get/set xxxxxxxx	pass get, pass set admin 	Reads/Sets password
+5	relay	on/off/read, relay
+number
+readall/writeall	relay on 0, relay off 0,
+relay read 0, relay readall,
+relay writeall ff	Relay control
+6	reset	None	reset	Reset relays to default state
+(all relays turned off)
+7	adc	read, channel 	adc read 0 	Read Analog to Digital
+Converter input
+8	gpio	set/clear/read,
+gpio number	gpio set 0 	Control General Purpose
+Input/Output
+
+The table below has more detailed information about available commands.
+No.	Command	Example	Description
+1	ver	ver	Returns current firmware version.
+2	id	id get
+id set xxxxxxxx	Id get reads the module ID. Id set will assign a new ID to the
+module. ?x? stands for alphanumeric characters including symbols. The new ID must be exactly 8 characters in length.
+3	usr	usr get
+usr set xxxxxxxx	usr get reads the default user name. usr set will assign a new usr name to the module. ?x? stands for alphanumeric characters including symbols. The new user name can be 1 ? 8 characters length.
+4	pass	pass get
+pass set xxxxxxxx	pass get reads the default password. pass set will assign a new password to the module. ?x? stands for alphanumeric characters including symbols. The new password can be 1 ? 8 characters length.
+5	relay	relay on x	Turns a particular relay on. The parameter ?x? stands for the relay number. The relay number starts from zero. See some examples below.
+
+relay on 0 ? Turns on relay 0
+relay on 1 ? Turns on relay 1
+		relay off x	Turns a particular relay off. The parameter ?x? stands for the
+relay number. The relay number starts from zero. See some examples below.
+
+relay off 0 ? Turns off relay 0
+relay off 1 ? Turns off relay 1
+		relay read x	Returns the status of a particular relay. The parameter ?x? stands for the relay number. The relay number starts from zero. See some examples below.
+
+relay read 0 ? Returns status of relay 0
+relay read 1 ? Returns status of relay 1
+
+The data returned in response to this command will be either
+?on? or ?off? depending on the current status of the relay.
+		relay readall 	Reads the status of all relays in a single operation. The return value will a hexadecimal number with binary value 1 at bit positions for relays in ON state and 0 for relays in OFF state.
+Eg: a return value 00 (binary 0000 0000) means all relays are OFF. A value FF (binary 1111 1111) means all relays are ON.
+
+relay readall ? Returns status of all relays
+		relay writeall xx	Control all relays in a single operation. A hexadecimal value must be specified with desired bit positions set to 0 or 1. A value 0 at a bit position will turn off the corresponding relay. A value 1 at a bit position will turn on the corresponding relay.
+
+relay writeall ff ? Turns on all relays
+6	reset	reset	Resets all relays to off state which is the default state. GPIO's
+are not by affected by the command.
+7	adc	adc read x	Reads the analog voltage present at the ADC input mentioned. ?x? stands for the number of ADC input. The response will be a number that ranges from 0 ? 1023. Please see examples below.
+
+adc read 0 ? Reads analog input 0
+adc read 2 ? Reads analog input 2
+8	gpio
+	gpio set x	Sets the GPIO output status to high. Here ?x? is the number of the GPIO. Please see examples below.
+
+gpio set 0 ? Sets GPIO 0 to high state
+gpio set 2 ? Sets GPIO 2 to high state
+		gpio clear x	Sets the GPIO output status to low. Here ?x? is the number of the GPIO. Please see examples below.
+
+gpio clear 0 ? Sets GPIO 0 to low state
+gpio clear 2 ? Sets GPIO 2 to low state
+		gpio read x	Reads the digital status present at the input mentioned. Here ?x? stands for the number of GPIO. The response will be either ?on? or ?off? depending on the current digital state of the GPIO. Please see examples below.
+
+gpio read 0 ? Reads GPIO 0 status
+gpio read 2 ? Reads GPIO 2 status
+

@@ -46,7 +46,7 @@ done:
     return result;
 }
 
-int listen_on_unix_socket(char const * const socket_name, bool use_abstract_namespace)
+int listen_on_unix_socket(char const * const socket_name, bool const use_abstract_namespace)
 {
     int sock;
     bool had_error;
