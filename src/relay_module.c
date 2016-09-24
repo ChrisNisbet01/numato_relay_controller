@@ -43,9 +43,6 @@ static bool relay_module_login(int const sock_fd, char const * const username, c
         goto done;
     }
 
-    /* XXX - TODO - Also look for login failure message ("Access 
-     * denied")?.
-     */
     if (!read_until_string_found(sock_fd, "Logged in successfully", "Access denied"))
     {
         logged_in = false;

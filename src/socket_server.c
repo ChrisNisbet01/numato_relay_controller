@@ -72,7 +72,10 @@ int listen_on_unix_socket(char const * const socket_name, bool const use_abstrac
     }
     len += sizeof server.sun_family;
 
-    unlink(socket_name);    /* remove any previous instances of the socket (non-abstract namespace only?) */
+    if (use_abstract_namespace)
+    {
+        unlink(socket_name);    /* remove any previous instances of the socket (non-abstract namespace only?) */
+    }
 
     if (bind(sock, (struct sockaddr *)&server, len))
     {
@@ -100,7 +103,7 @@ done:
     return sock;
 }
 
-void close_connection_to_unix_socket(int const sock_fd)
+void close_unix_socket(int const sock_fd)
 {
     if (sock_fd >= 0)
     {

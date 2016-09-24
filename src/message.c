@@ -213,28 +213,23 @@ done:
     return;
 }
 
-void process_new_command(int const msg_sock,
+void process_new_request(int const msg_sock,
                          message_handler_st const * const handlers,
                          void * const user_info)
 {
-    json_object * message = NULL;
+    json_object * request = NULL;
 
-    message = read_json_from_stream(msg_sock, JSON_MESSAGE_READ_TIMEOUT_SECONDS);
+    request = read_json_from_stream(msg_sock, JSON_MESSAGE_READ_TIMEOUT_SECONDS);
 
-    if (message == NULL)
+    if (request == NULL)
     {
         goto done;
     }
 
-    process_json_message(message, msg_sock, handlers, user_info);
+    process_json_message(request, msg_sock, handlers, user_info);
 
 done:
-    if (msg_sock != -1)
-    {
-        close(msg_sock);
-    }
-    json_object_put(message);
-
+    json_object_put(request);
 }
 
 
