@@ -102,8 +102,6 @@ static void process_zone(json_object * const zone, relay_states_st * const relay
         goto done;
     }
 
-    fprintf(stderr, "set relay %d state %s\n", relay_id, state ? "on" : "off");
-
     relay_states_set_state(relay_states, relay_id, state);
 
 done:
@@ -165,8 +163,6 @@ static void process_set_state_message(json_object * const message,
                                       void * const user_info)
 {
     relay_states_st * relay_states;
-
-    fprintf(stderr, "processing 'set state' message\n");
 
     relay_states = get_desired_relay_states_from_message(message);
     if (relay_states == NULL)

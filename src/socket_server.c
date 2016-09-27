@@ -56,7 +56,6 @@ int listen_on_unix_socket(char const * const socket_name, bool const use_abstrac
     sock = socket(AF_LOCAL, SOCK_STREAM, 0);
     if (sock < 0)
     {
-        fprintf(stderr, "No socket\n");
         had_error = true;
         goto done;
     }
@@ -66,7 +65,6 @@ int listen_on_unix_socket(char const * const socket_name, bool const use_abstrac
     len = set_socket_name(server.sun_path, sizeof server.sun_path, socket_name, use_abstract_namespace);
     if (len < 0)
     {
-        fprintf(stderr, "set_socket_name_failed\n");
         had_error = true;
         goto done;
     }
@@ -79,14 +77,12 @@ int listen_on_unix_socket(char const * const socket_name, bool const use_abstrac
 
     if (bind(sock, (struct sockaddr *)&server, len))
     {
-        fprintf(stderr, "bind failed\n");
         had_error = true;
         goto done;
     }
 
     if (listen(sock, 5) == -1)
     {
-        fprintf(stderr, "listen failed\n");
         had_error = true;
         goto done;
     }

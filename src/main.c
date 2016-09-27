@@ -165,9 +165,6 @@ static void set_state_handler(void * const user_info, relay_states_st * const de
     relay_states_update_module(desired_relay_states, 
                                info->relay_module_info, 
                                info->relay_fd);
-
-    fprintf(stderr, "\n");
-
 }
 
 static void process_requests(int const command_fd, relay_module_info_st const * const relay_module_info)
@@ -190,7 +187,6 @@ static void process_requests(int const command_fd, relay_module_info_st const * 
         num_fds = command_fd + 1; 
 
         sockets_waiting = TEMP_FAILURE_RETRY(select(num_fds, &fds, NULL, NULL, &timeout));
-        fprintf(stderr, "sockets waiting: %d\n", sockets_waiting);
         if (sockets_waiting == -1)
         {
             had_error = true;
@@ -311,7 +307,6 @@ int main(int argc, char * * argv)
         if (daemonise_result == 0)
         {
             /* This is the parent process, which can exit now. */
-            fprintf(stderr, "Demonised\n");
             exit_code = EXIT_SUCCESS;
             goto done;
         }

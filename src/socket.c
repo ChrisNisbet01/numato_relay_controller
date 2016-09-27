@@ -20,7 +20,6 @@ int connect_to_socket(char const * const socket_name, uint16_t const port)
     server = gethostbyname(socket_name);
     if (server == NULL)
     {
-        fprintf(stderr, "ERROR, no such host\n");
         sockfd = -1;
         goto done;
     }
