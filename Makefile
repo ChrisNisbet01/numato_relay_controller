@@ -1,9 +1,9 @@
 #Makefile to build numato relay controller
 
-LIB_PREFIX=/home/chris/projects/install
+LIB_PREFIX=/usr/local
 INCLUDES = -I/src -I$(LIB_PREFIX)/include
 DEFINES = -D_GNU_SOURCE
-LIBS=-lread_line -ljson-c
+LIBS=-lioutils -ljson-c
 #LIBS=-ljson-c
 LDFLAGS ?= -L$(LIB_PREFIX)/lib -Wl,-rpath $(LIB_PREFIX)/lib
 SRC_DIR=src
