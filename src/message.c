@@ -73,11 +73,11 @@ static bool parse_zone(json_object * const zone, unsigned int * const relay_id, 
     }
     *relay_id = json_object_get_int(object);
 
-    if (strcasecmp(state_value, "on") == 0)
+    if (strcasecmp(state_value, relay_state_on_string) == 0)
     {
         *state = true;
     }
-    else if (strcasecmp(state_value, "off") == 0)
+    else if (strcasecmp(state_value, relay_state_off_string) == 0)
     {
         *state = false;
     }
