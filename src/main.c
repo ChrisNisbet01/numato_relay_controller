@@ -1,8 +1,10 @@
-#include "socket_server.h"
 #include "relay_module.h"
 #include "relay_states.h"
-#include "message.h"
 #include "daemonize.h"
+#include "debug.h"
+#include "ubus.h"
+#include "ubus_server.h"
+#include "message.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,30 +14,6 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <time.h>
-
-/* Application to control the relays on a Numato 8 relay 
- * ethernet board. It connects to the device using a Telnet 
- * connection and issue the appropriate commands to turn the 
- * relays on and off. 
- * The interface to this application is by way of JSON messages 
- * to a UNIX socket the the applicaiton is listening on. The 
- * listening address is supplied by the user on the command line 
- * when starting the application. 
- */
-
-/* JSON message request format: */
-//{  
-//    "method" : "set state",
-//    "params" : {
-//        "relays" : [
-//            {
-//                "id" : (int)<relay id >,
-//                "state" : "on" | "off"
-//            },
-//            ...
-//        ]
-//    }
-//}
  
 /* Numato relay controller default username and password. 
  * Inlcuded in this file for reference, but should always be 
@@ -251,10 +229,11 @@ static void relay_module_info_init(relay_module_info_st * const relay_module_inf
 
 static void usage(char const * const program_name)
 {
-    fprintf(stdout, "Usage: %s [options] <listening_socket_name> <module address> <username> <password>\n", program_name);
+    fprintf(stdout, "Usage: %s [options] <GPIO module address> <username> <password>\n", program_name);
     fprintf(stdout, "\n");
     fprintf(stdout, "Options:\n");
     fprintf(stdout, "  -d %-21s %s\n", "", "Run as a daemon");
+    fprintf(stdout, "  -s %-21s %s\n", "ubus socket", "Ubus socket path");
 }
 
 int main(int argc, char * * argv)
@@ -263,16 +242,20 @@ int main(int argc, char * * argv)
     bool daemonise = false;
     int daemonise_result;
     int exit_code;
-    unsigned int const min_args = 4;
+    unsigned int const min_args = 3;
     unsigned int args_remaining;
     int option;
+    char const * listening_socket_name = NULL;
 
-    while ((option = getopt(argc, argv, "?d")) != -1)
+    while ((option = getopt(argc, argv, "s:?d")) != -1)
     {
         switch (option)
         {
             case 'd':
                 daemonise = true;
+                break;
+            case 's':
+                listening_socket_name = argv[optind];
                 break;
             case '?':
                 usage(basename(argv[0]));
@@ -288,12 +271,15 @@ int main(int argc, char * * argv)
         exit_code = EXIT_FAILURE;
         goto done;
     }
+
     relay_module_info_init(&relay_module_info,
-                           argv[optind + 1], 
+                           argv[optind], 
                            TELNET_PORT,
-                           argv[optind + 2],
-                           argv[optind + 3]
+                           argv[optind + 1],
+                           argv[optind + 2]
                            );
+
+    listening_socket_name = argv[optind];
 
     if (daemonise)
     {
@@ -312,9 +298,35 @@ int main(int argc, char * * argv)
         }
     }
 
+    struct ubus_context * const ubus_ctx = ubus_initialise(path);
+
+    if (ubus_ctx == NULL)
+    {
+        DPRINTF("\r\nfailed to initialise UBUS\n");
+        exit_code = EXIT_FAILURE;
+        goto done;
+    }
+
+    bool const ubus_server_initialised = ubus_server_initialise(ubus_ctx);
+
+    if (!ubus_server_initialised)
+    {
+        DPRINTF("\r\nfailed to initialise UBUS server\n");
+        exit_code = EXIT_FAILURE;
+        goto done;
+    }
+
+    uloop_run();
+
+    uloop_done();
+
+    ubus_done();
+    ubus_server_done(); 
+
+
     for (;;)
     {
-        relay_worker(argv[optind], &relay_module_info);
+        relay_worker(listening_socket_name, &relay_module_info);
 
         usleep(500000); /* This is just so that we don't retry failing connections too quickly. */
     }
