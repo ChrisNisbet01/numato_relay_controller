@@ -1,8 +1,7 @@
 #include "ubus_server.h"
 #include "ubus_private.h"
 #include "debug.h"
-
-#include "sysfs_gpio_module.h"
+#include "relay_states.h"
 
 #include <libubox/blobmsg.h>
 
@@ -83,6 +82,8 @@ gpio_set_handler(
     uint32_t const pin = blobmsg_get_u32(tb[GPIO_SET_PIN]);
     bool const state = blobmsg_get_bool(tb[GPIO_SET_STATE]);
 
+    (void)pin;
+    (void)state;
     /* XXX - TODO: Update the state of the relay here. */
     bool const success = true;
 
@@ -124,6 +125,8 @@ gpio_get_handler(
 
     uint32_t const pin = blobmsg_get_u32(tb[GPIO_GET_PIN]);
     bool state;
+
+    (void)pin;
 
     /* XXX - TODO: get teh input state (are there any?) here. */
     state = false;

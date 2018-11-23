@@ -1,6 +1,6 @@
 #include "ubus.h"
 #include "ubus_server.h"
-#include "sysfs_gpio_module.h"
+#include "ubus_private.h"
 #include "debug.h"
 
 #include <libubox/blobmsg.h>
@@ -30,7 +30,7 @@ ubus_reconnect_timer(struct uloop_timeout * timeout)
 {
     static struct uloop_timeout retry =
     {
-        .cb = gpio_ubus_reconnect_timer,
+        .cb = ubus_reconnect_timer,
     };
     int const t = 2;
     int const timeout_millisecs = t * 1000;
@@ -60,13 +60,13 @@ ubus_initialise(char const * const path)
 
     if (ubus_ctx == NULL) 
     {
-        DPRINTF("Failed to connect to ubus\n");
+        DPRINTF("Failed to connect to ubus on path: %s\n", path);
         goto done;
     }
 
     ubus_ctx->connection_lost = ubus_connection_lost;
 
-    gpio_ubus_add_fd();
+    ubus_add_fd();
 
 done:
     return ubus_ctx;

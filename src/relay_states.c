@@ -89,4 +89,12 @@ unsigned int relay_states_get_states_bitmask(relay_states_st const * const relay
     return relay_states->desired_states;
 }
 
+size_t numato_num_inputs(void)
+{
+    return 0;
+}
 
+size_t numato_num_outputs(void)
+{
+    return 8;
+}

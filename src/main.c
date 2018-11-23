@@ -145,75 +145,6 @@ static void set_state_handler(void * const user_info, relay_states_st * const de
                                info->relay_fd);
 }
 
-static void process_requests(int const command_fd, relay_module_info_st const * const relay_module_info)
-{
-    int relay_fd = -1;
-    fd_set fds;
-    unsigned int num_fds;
-    bool had_error = false;
-
-    for (; !had_error;)
-    {
-        int sockets_waiting;
-        struct timeval timeout;
-
-        timeout.tv_sec = MESSAGE_INACTIVITY_TIMEOUT_SECONDS;
-        timeout.tv_usec = 0;
-
-        FD_ZERO(&fds);
-        FD_SET(command_fd, &fds);
-        num_fds = command_fd + 1; 
-
-        sockets_waiting = TEMP_FAILURE_RETRY(select(num_fds, &fds, NULL, NULL, &timeout));
-        if (sockets_waiting == -1)
-        {
-            had_error = true;
-        }
-        else if (sockets_waiting == 0) /* Timeout. */
-        {
-            relay_module_disconnect(relay_fd);
-            relay_fd = -1;
-        }
-        else
-        {
-            int msg_sock = -1;
-            message_handler_info_st info;
-
-            msg_sock = TEMP_FAILURE_RETRY(accept(command_fd, 0, 0));
-            if (msg_sock == -1)
-            {
-                continue;
-            }
-            info.relay_fd = &relay_fd;
-            info.relay_module_info = relay_module_info;
-
-            process_new_request(msg_sock, &message_handlers, &info);
-
-            close(msg_sock); 
-        }
-    }
-
-    relay_module_disconnect(relay_fd);
-
-    return;
-}
-
-static void relay_worker(char const * const listening_socket_name, relay_module_info_st const * const relay_module_info)
-{
-    int command_socket = -1;
-
-    command_socket = listen_on_unix_socket(listening_socket_name, true);
-    if (command_socket < 0)
-    {
-        goto done;
-    }
-
-    process_requests(command_socket, relay_module_info);
-
-done:
-    close_unix_socket(command_socket);
-}
-
 static void relay_module_info_init(relay_module_info_st * const relay_module_info,
                                    char const * const module_address,
                                    uint16_t const module_port,
@@ -279,8 +210,6 @@ int main(int argc, char * * argv)
                            argv[optind + 2]
                            );
 
-    listening_socket_name = argv[optind];
-
     if (daemonise)
     {
         daemonise_result = daemonize(NULL, NULL, NULL);
@@ -298,7 +227,7 @@ int main(int argc, char * * argv)
         }
     }
 
-    struct ubus_context * const ubus_ctx = ubus_initialise(path);
+    struct ubus_context * const ubus_ctx = ubus_initialise(listening_socket_name);
 
     if (ubus_ctx == NULL)
     {
@@ -322,14 +251,6 @@ int main(int argc, char * * argv)
 
     ubus_done();
     ubus_server_done(); 
-
-
-    for (;;)
-    {
-        relay_worker(listening_socket_name, &relay_module_info);
-
-        usleep(500000); /* This is just so that we don't retry failing connections too quickly. */
-    }
 
     exit_code = EXIT_SUCCESS;
 
