@@ -23,6 +23,9 @@ static char const result_str[] = "result";
 
 struct ubus_context * ubus_ctx;
 
+static message_handler_st const * handlers;
+static void * user_info;
+
 enum
 {
     GPIO_COUNT_TYPE,
@@ -82,8 +85,21 @@ gpio_set_handler(
     uint32_t const pin = blobmsg_get_u32(tb[GPIO_SET_PIN]);
     bool const state = blobmsg_get_bool(tb[GPIO_SET_STATE]);
 
-    (void)pin;
-    (void)state;
+    relay_states_st * const relay_states = relay_states_create();
+
+    if (relay_states != NULL)
+    {
+        relay_states_set_state(relay_states, pin, state);
+
+        if (handlers->set_state_handler != NULL)
+        {
+            handlers->set_state_handler(user_info, relay_states);
+        }
+
+        relay_states_free(relay_states);
+    }
+
+
     /* XXX - TODO: Update the state of the relay here. */
     bool const success = true;
 
@@ -236,9 +252,13 @@ static struct ubus_object gpio_object =
 
 bool
 ubus_server_initialise(
-    struct ubus_context * const ctx)
+    struct ubus_context * const ctx,
+    message_handler_st const * const handlers_in,
+    void * const user_info_in)
 {
     ubus_ctx = ctx;
+    handlers = handlers_in;
+    user_info = user_info_in;
 
     return gpio_add_object(ubus_ctx, &gpio_object);
 }

@@ -60,6 +60,9 @@ static message_handler_st const message_handlers =
     .set_state_handler = set_state_handler
 };
 
+static int relay_fd = -1;
+static message_handler_info_st message_handler_info;
+
 static bool need_to_update_module(relay_state_ctx_st const * const relay_state_ctx,
                                   unsigned int const writeall_bitmask)
 {
@@ -153,7 +156,6 @@ static void relay_module_info_init(relay_module_info_st * const relay_module_inf
 {
     relay_module_info->address = module_address;
     relay_module_info->port = module_port;
-    relay_module_info->port = module_port;
     relay_module_info->username = username;
     relay_module_info->password = password;
 }
@@ -236,7 +238,14 @@ int main(int argc, char * * argv)
         goto done;
     }
 
-    bool const ubus_server_initialised = ubus_server_initialise(ubus_ctx);
+    message_handler_info.relay_fd = &relay_fd;
+    message_handler_info.relay_module_info = &relay_module_info;
+
+    bool const ubus_server_initialised = 
+        ubus_server_initialise(
+            ubus_ctx, 
+            &message_handlers, 
+            &message_handler_info);
 
     if (!ubus_server_initialised)
     {
